@@ -19,6 +19,7 @@ interface Message {
   color: string;
   timestamp: string;
   roomId: string;
+  tag?: string;
 }
 
 interface Room {
@@ -45,6 +46,13 @@ interface Plugin {
   createdAt: string;
 }
 
+interface PluginUI {
+  pluginId: string;
+  title: string;
+  icon?: string;
+  content: string; // HTML or Markdown
+}
+
 export default function ChatApp() {
   const socketRef = useRef<Socket | null>(null);
   const [socketId, setSocketId] = useState<string | null>(null);
@@ -55,6 +63,8 @@ export default function ChatApp() {
   const [messages, setMessages] = useState<Record<string, Message[]>>({});
   const [rooms, setRooms] = useState<Room[]>([]);
   const [activeRoomId, setActiveRoomId] = useState('public');
+  const [activeView, setActiveView] = useState<'chat' | 'admin' | string>('chat');
+  const [pluginUI, setPluginUI] = useState<PluginUI[]>([]);
   const [input, setInput] = useState('');
   const [onlineUsers, setOnlineUsers] = useState<ChatUser[]>([]);
   const [userColor, setUserColor] = useState('');
@@ -62,7 +72,6 @@ export default function ChatApp() {
   const [error, setError] = useState('');
   const [showCreateGroup, setShowCreateGroup] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  const [showAdminPanel, setShowAdminPanel] = useState(false);
   const [plugins, setPlugins] = useState<Plugin[]>([]);
   const [showPluginUpload, setShowPluginUpload] = useState(false);
   const [newPlugin, setNewPlugin] = useState({ name: '', code: '', permissions: [] as string[] });
@@ -127,6 +136,10 @@ export default function ChatApp() {
 
     newSocket.on('plugin_list', (pluginList: Plugin[]) => {
       setPlugins(pluginList);
+    });
+
+    newSocket.on('plugin_ui', (uiList: PluginUI[]) => {
+      setPluginUI(uiList);
     });
 
     newSocket.on('error_message', (msg: string) => {
@@ -367,7 +380,10 @@ export default function ChatApp() {
             <div className="flex items-center justify-between px-2">
               <p className="text-[10px] font-bold uppercase tracking-widest text-white/30">聊天频道</p>
               <button 
-                onClick={() => setShowCreateGroup(true)}
+                onClick={() => {
+                  setActiveView('chat');
+                  setShowCreateGroup(true);
+                }}
                 className="text-white/30 hover:text-white transition-colors"
                 title="创建群聊"
               >
@@ -378,13 +394,16 @@ export default function ChatApp() {
               {rooms.map((room) => (
                 <div 
                   key={room.id}
-                  onClick={() => setActiveRoomId(room.id)}
-                  onKeyDown={(e) => e.key === 'Enter' && setActiveRoomId(room.id)}
+                  onClick={() => {
+                    setActiveView('chat');
+                    setActiveRoomId(room.id);
+                  }}
+                  onKeyDown={(e) => e.key === 'Enter' && (setActiveView('chat'), setActiveRoomId(room.id))}
                   role="button"
                   tabIndex={0}
                   className={cn(
                     "flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium transition-all group cursor-pointer outline-none",
-                    activeRoomId === room.id ? "bg-white/10 text-white" : "text-white/50 hover:bg-white/5 hover:text-white"
+                    (activeView === 'chat' && activeRoomId === room.id) ? "bg-white/10 text-white" : "text-white/50 hover:bg-white/5 hover:text-white"
                   )}
                 >
                   {room.type === 'public' ? <Hash className="h-4 w-4 opacity-50" /> : 
@@ -409,6 +428,27 @@ export default function ChatApp() {
               ))}
             </div>
           </div>
+
+          {pluginUI.length > 0 && (
+            <div>
+              <p className="px-2 text-[10px] font-bold uppercase tracking-widest text-white/30">扩展功能</p>
+              <div className="mt-2 space-y-1">
+                {pluginUI.map((ui) => (
+                  <button 
+                    key={ui.pluginId}
+                    onClick={() => setActiveView(ui.pluginId)}
+                    className={cn(
+                      "flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium transition-all",
+                      activeView === ui.pluginId ? "bg-white/10 text-white" : "text-white/50 hover:bg-white/5 hover:text-white"
+                    )}
+                  >
+                    <Code className="h-4 w-4 opacity-50" />
+                    <span className="truncate">{ui.title}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div>
             <div className="flex items-center justify-between px-2">
@@ -449,7 +489,10 @@ export default function ChatApp() {
                         </button>
                       </>
                     )}
-                    <button onClick={() => startDM(user)} className="p-1 text-white/30 hover:text-white">
+                    <button onClick={() => {
+                      setActiveView('chat');
+                      startDM(user);
+                    }} className="p-1 text-white/30 hover:text-white">
                       <MessageSquare className="h-3 w-3" />
                     </button>
                   </div>
@@ -463,10 +506,10 @@ export default function ChatApp() {
               <p className="px-2 text-[10px] font-bold uppercase tracking-widest text-white/30">管理</p>
               <div className="mt-2 space-y-1">
                 <button 
-                  onClick={() => setShowAdminPanel(true)}
+                  onClick={() => setActiveView('admin')}
                   className={cn(
                     "flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium transition-all",
-                    showAdminPanel ? "bg-amber-500/10 text-amber-500" : "text-white/50 hover:bg-white/5 hover:text-white"
+                    activeView === 'admin' ? "bg-amber-500/10 text-amber-500" : "text-white/50 hover:bg-white/5 hover:text-white"
                   )}
                 >
                   <Shield className="h-4 w-4 opacity-50" />
@@ -509,9 +552,9 @@ export default function ChatApp() {
         </div>
       </div>
 
-      {/* Main Chat Area */}
+      {/* Main Content Area */}
       <div className="flex flex-1 flex-col relative">
-        {showAdminPanel ? (
+        {activeView === 'admin' ? (
           <div className="flex-1 flex flex-col bg-[#0a0a0a]">
             <header className="flex h-16 items-center justify-between border-b border-white/10 px-6">
               <div className="flex items-center gap-3">
@@ -519,7 +562,7 @@ export default function ChatApp() {
                 <h3 className="text-sm font-bold">插件管理中心</h3>
               </div>
               <button 
-                onClick={() => setShowAdminPanel(false)}
+                onClick={() => setActiveView('chat')}
                 className="text-sm text-white/50 hover:text-white"
               >
                 返回聊天
@@ -582,93 +625,125 @@ export default function ChatApp() {
               </div>
             </div>
           </div>
-        ) : (
+        ) : activeView === 'chat' ? (
           <>
             {/* Header */}
             <header className="flex h-16 items-center justify-between border-b border-white/10 bg-white/5 px-6 backdrop-blur-xl">
-          <div className="flex items-center gap-3">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-white/10 md:hidden">
-              <Users className="h-4 w-4" />
-            </div>
-            <div>
-              <h3 className="text-sm font-bold">
-                {activeRoom?.type === 'public' ? '# ' : 
-                 activeRoom?.type === 'group' ? '👥 ' : '💬 '}
-                {activeRoom?.name}
-              </h3>
-              <p className="text-[10px] text-white/30">
-                {activeRoom?.type === 'public' ? '欢迎来到星辰通讯中心' : 
-                 activeRoom?.type === 'group' ? `由 ${activeRoom.creator} 创建的群组` : '私密对话'}
-              </p>
-            </div>
-          </div>
-        </header>
+              <div className="flex items-center gap-3">
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-white/10 md:hidden">
+                  <Users className="h-4 w-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold">
+                    {activeRoom?.type === 'public' ? '# ' : 
+                     activeRoom?.type === 'group' ? '👥 ' : '💬 '}
+                    {activeRoom?.name}
+                  </h3>
+                  <p className="text-[10px] text-white/30">
+                    {activeRoom?.type === 'public' ? '欢迎来到星辰通讯中心' : 
+                     activeRoom?.type === 'group' ? `由 ${activeRoom.creator} 创建的群组` : '私密对话'}
+                  </p>
+                </div>
+              </div>
+            </header>
 
-        {/* Messages */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-6">
-          <AnimatePresence initial={false}>
-            {currentMessages.map((msg) => (
-              <motion.div
-                key={msg.id}
-                initial={{ opacity: 0, x: -10 }}
-                animate={{ opacity: 1, x: 0 }}
-                className={cn(
-                  "flex gap-4",
-                  msg.senderId === socketId && "flex-row-reverse"
-                )}
-              >
-                <div 
-                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl font-bold text-black"
-                  style={{ backgroundColor: msg.color }}
+            {/* Messages */}
+            <div className="flex-1 overflow-y-auto p-6 space-y-6">
+              <AnimatePresence initial={false}>
+                {currentMessages.map((msg) => (
+                  <motion.div
+                    key={msg.id}
+                    initial={{ opacity: 0, x: -10 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    className={cn(
+                      "flex gap-4",
+                      msg.senderId === socketId && "flex-row-reverse"
+                    )}
+                  >
+                    <div 
+                      className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl font-bold text-black"
+                      style={{ backgroundColor: msg.color }}
+                    >
+                      {msg.sender[0]?.toUpperCase()}
+                    </div>
+                    <div className={cn(
+                      "flex max-w-[70%] flex-col gap-1",
+                      msg.senderId === socketId && "items-end"
+                    )}>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold text-white/50">{msg.sender}</span>
+                        {msg.tag && (
+                          <span className="rounded bg-white/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-white/40 border border-white/5">
+                            {msg.tag}
+                          </span>
+                        )}
+                        <span className="text-[10px] text-white/20">
+                          {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      </div>
+                      <div className={cn(
+                        "rounded-2xl px-4 py-3 text-sm leading-relaxed",
+                        msg.senderId === socketId 
+                          ? "bg-white text-black rounded-tr-none" 
+                          : "bg-white/10 text-white rounded-tl-none border border-white/10"
+                      )}>
+                        {msg.text}
+                      </div>
+                    </div>
+                  </motion.div>
+                ))}
+              </AnimatePresence>
+              <div ref={messagesEndRef} />
+            </div>
+
+            {/* Input */}
+            <div className="p-6">
+              <form onSubmit={handleSendMessage} className="relative">
+                <input
+                  type="text"
+                  placeholder={`在 ${activeRoom?.name} 中发送消息...`}
+                  className="w-full rounded-2xl border border-white/10 bg-white/5 py-4 pl-6 pr-16 text-sm text-white outline-none transition-all focus:border-white/30 focus:bg-white/10"
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                />
+                <button
+                  type="submit"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded-xl bg-white p-2 text-black transition-transform hover:scale-110 active:scale-95"
                 >
-                  {msg.sender[0]?.toUpperCase()}
-                </div>
-                <div className={cn(
-                  "flex max-w-[70%] flex-col gap-1",
-                  msg.senderId === socketId && "items-end"
-                )}>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-bold text-white/50">{msg.sender}</span>
-                    <span className="text-[10px] text-white/20">
-                      {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                    </span>
+                  <Send className="h-5 w-5" />
+                </button>
+              </form>
+            </div>
+          </>
+        ) : (
+          // Plugin View
+          <div className="flex-1 flex flex-col bg-[#0a0a0a]">
+            {(() => {
+              const ui = pluginUI.find(u => u.pluginId === activeView);
+              if (!ui) return <div className="p-6 text-white/50">插件内容未找到</div>;
+              return (
+                <>
+                  <header className="flex h-16 items-center justify-between border-b border-white/10 px-6">
+                    <div className="flex items-center gap-3">
+                      <Code className="h-5 w-5 text-amber-500" />
+                      <h3 className="text-sm font-bold">{ui.title}</h3>
+                    </div>
+                    <button 
+                      onClick={() => setActiveView('chat')}
+                      className="text-sm text-white/50 hover:text-white"
+                    >
+                      返回聊天
+                    </button>
+                  </header>
+                  <div className="flex-1 overflow-y-auto p-6 text-white prose prose-invert max-w-none">
+                    <div dangerouslySetInnerHTML={{ __html: ui.content }} />
                   </div>
-                  <div className={cn(
-                    "rounded-2xl px-4 py-3 text-sm leading-relaxed",
-                    msg.senderId === socketId 
-                      ? "bg-white text-black rounded-tr-none" 
-                      : "bg-white/10 text-white rounded-tl-none border border-white/10"
-                  )}>
-                    {msg.text}
-                  </div>
-                </div>
-              </motion.div>
-            ))}
-          </AnimatePresence>
-          <div ref={messagesEndRef} />
-        </div>
-
-        {/* Input */}
-        <div className="p-6">
-          <form onSubmit={handleSendMessage} className="relative">
-            <input
-              type="text"
-              placeholder={`在 ${activeRoom?.name} 中发送消息...`}
-              className="w-full rounded-2xl border border-white/10 bg-white/5 py-4 pl-6 pr-16 text-sm text-white outline-none transition-all focus:border-white/30 focus:bg-white/10"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-            />
-            <button
-              type="submit"
-              className="absolute right-2 top-1/2 -translate-y-1/2 rounded-xl bg-white p-2 text-black transition-transform hover:scale-110 active:scale-95"
-            >
-              <Send className="h-5 w-5" />
-            </button>
-          </form>
-        </div>
-      </>
-    )}
-  </div>
+                </>
+              );
+            })()}
+          </div>
+        )}
+      </div>
 
       {/* Create Group Modal */}
       {showCreateGroup && (
@@ -889,3 +964,4 @@ export default function ChatApp() {
     </div>
   );
 }
+
