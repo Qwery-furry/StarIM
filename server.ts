@@ -30,7 +30,7 @@ class PluginManager {
     }
   }
 
-  async loadPlugins() {
+  async loadPlugins(io: Server) {
     const rows = await this.db.all('SELECT * FROM plugins WHERE enabled = 1');
     this.plugins.clear();
     for (const row of rows) {
@@ -54,7 +54,7 @@ class PluginManager {
         }
       }
 
-      this.runPlugin({ ...row, code });
+      this.runPlugin({ ...row, code }, io);
     }
   }
 
@@ -70,7 +70,7 @@ class PluginManager {
     }
   }
 
-  private runPlugin(plugin: any) {
+  private runPlugin(plugin: any, io: Server) {
     const permissions = JSON.parse(plugin.permissions);
     const sandbox = {
       console,
@@ -79,6 +79,29 @@ class PluginManager {
         all: permissions.includes('db:read') ? this.db.all.bind(this.db) : undefined,
         run: permissions.includes('db:write') ? this.db.run.bind(this.db) : undefined,
         exec: permissions.includes('db:write') ? this.db.exec.bind(this.db) : undefined,
+      },
+      sendMessage: async (data: { roomId: string, text: string, sender: string, color?: string, tag?: string }) => {
+        const message = {
+          id: `bot_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          text: data.text,
+          sender: data.sender,
+          senderId: 'system_plugin',
+          color: data.color || '#94a3b8',
+          timestamp: new Date().toISOString(),
+          roomId: data.roomId || 'public',
+          tag: data.tag
+        };
+        try {
+          await this.db.run(
+            'INSERT INTO messages (id, text, sender, senderId, color, timestamp, roomId, tag) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+            [message.id, message.text, message.sender, message.senderId, message.color, message.timestamp, message.roomId, message.tag]
+          );
+          io.to(message.roomId).emit('receive_message', message);
+          return true;
+        } catch (err) {
+          console.error('Plugin failed to send message:', err);
+          return false;
+        }
       },
       hooks: {} as any
     };
@@ -105,6 +128,29 @@ class PluginManager {
       }
     }
     return true;
+  }
+
+  async getPluginUI(userRole: string) {
+    const uiList: any[] = [];
+    for (const [id, hooks] of this.plugins.entries()) {
+      if (hooks && typeof hooks.getUI === 'function') {
+        try {
+          const ui = await hooks.getUI();
+          if (ui) {
+            // Check roles if specified
+            if (ui.allowedRoles && Array.isArray(ui.allowedRoles)) {
+              if (!ui.allowedRoles.includes(userRole)) {
+                continue;
+              }
+            }
+            uiList.push({ pluginId: id, ...ui });
+          }
+        } catch (err) {
+          console.error(`Error in plugin getUI for ${id}:`, err);
+        }
+      }
+    }
+    return uiList;
   }
 }
 
@@ -149,7 +195,8 @@ async function setupDatabase() {
       senderId TEXT NOT NULL,
       color TEXT NOT NULL,
       timestamp TEXT NOT NULL,
-      roomId TEXT NOT NULL DEFAULT 'public'
+      roomId TEXT NOT NULL DEFAULT 'public',
+      tag TEXT
     );
 
     -- Ensure public room exists
@@ -172,7 +219,6 @@ async function setupDatabase() {
 app.prepare().then(async () => {
   const db = await setupDatabase();
   const pluginManager = new PluginManager(db);
-  await pluginManager.loadPlugins();
 
   const expressApp = express();
   const server = createServer(expressApp);
@@ -182,6 +228,8 @@ app.prepare().then(async () => {
       methods: ["GET", "POST"]
     }
   });
+
+  await pluginManager.loadPlugins(io);
 
   expressApp.use(cors());
 
@@ -228,6 +276,8 @@ app.prepare().then(async () => {
           WHERE r.type = 'public' OR rm.username = ?
         `, [user.username]);
         socket.emit('room_list', rooms);
+        const pluginUI = await pluginManager.getPluginUI(user.role);
+        socket.emit('plugin_ui', pluginUI);
         if (user.role === 'admin') {
           const plugins = await db.all('SELECT * FROM plugins');
           socket.emit('plugin_list', plugins);
@@ -300,6 +350,8 @@ app.prepare().then(async () => {
         `, [username]);
         
         socket.emit('room_list', rooms);
+        const pluginUI = await pluginManager.getPluginUI(user.role);
+        socket.emit('plugin_ui', pluginUI);
         
         // If admin, send plugin list
         if (user.role === 'admin') {
@@ -385,18 +437,25 @@ app.prepare().then(async () => {
             [id, pluginData.name, pluginData.code, JSON.stringify(pluginData.permissions), new Date().toISOString()]
           );
           await pluginManager.savePluginFile(id, pluginData.code);
-          await pluginManager.loadPlugins();
+          await pluginManager.loadPlugins(io);
         } else if (type === 'toggle_plugin') {
           await db.run('UPDATE plugins SET enabled = NOT enabled WHERE id = ?', [pluginData.id]);
-          await pluginManager.loadPlugins();
+          await pluginManager.loadPlugins(io);
         } else if (type === 'remove_plugin') {
           await db.run('DELETE FROM plugins WHERE id = ?', [pluginData.id]);
           await pluginManager.deletePluginFile(pluginData.id);
-          await pluginManager.loadPlugins();
+          await pluginManager.loadPlugins(io);
         }
 
         // Refresh lists
         io.emit('user_list', Array.from(activeSessions.values()));
+        
+        // Refresh plugin UI for everyone based on their roles
+        for (const [sid, session] of activeSessions.entries()) {
+          const ui = await pluginManager.getPluginUI(session.role);
+          io.sockets.sockets.get(sid)?.emit('plugin_ui', ui);
+        }
+        
         if (admin.role === 'admin') {
           const plugins = await db.all('SELECT * FROM plugins');
           socket.emit('plugin_list', plugins);
@@ -432,8 +491,8 @@ app.prepare().then(async () => {
         
         try {
           await db.run(
-            'INSERT INTO messages (id, text, sender, senderId, color, timestamp, roomId) VALUES (?, ?, ?, ?, ?, ?, ?)',
-            [message.id, message.text, message.sender, message.senderId, message.color, message.timestamp, message.roomId]
+            'INSERT INTO messages (id, text, sender, senderId, color, timestamp, roomId, tag) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+            [message.id, message.text, message.sender, message.senderId, message.color, message.timestamp, message.roomId, null]
           );
           io.to(message.roomId).emit('receive_message', message);
         } catch (err) {
