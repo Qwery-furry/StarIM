@@ -33,6 +33,23 @@
   - `roomId`: 房间 ID。
 - **返回值**: `true` 允许发送，`false` 拦截消息。
 
+### 3. `getUI()`
+允许插件定义前端 UI 内容。
+- **返回值**: 一个对象，包含：
+  - `title`: 侧边栏显示的标题。
+  - `content`: 要在主区域显示的 HTML 内容（支持 HTML 字符串）。
+  - `allowedRoles` (可选): 一个字符串数组，指定允许访问该内容的级别（如 `['admin']` 或 `['admin', 'user']`）。如果未指定，则所有用户均可访问。
+
+### 4. `sendMessage({ roomId, text, sender, color, tag })`
+允许插件在指定房间发送消息。
+- **参数**:
+  - `roomId`: 房间 ID（默认为 'public'）。
+  - `text`: 消息内容。
+  - `sender`: 显示的发送者名称。
+  - `color` (可选): 发送者头像颜色。
+  - `tag` (可选): 发送者名称旁显示的特殊标签（如 '机器人', '官方'）。
+- **返回值**: `true` 发送成功，`false` 发送失败。
+
 ---
 
 ## 示例插件
@@ -71,6 +88,46 @@ hooks.onNewMessage = async ({ user, text, roomId }) => {
   if (text.toLowerCase() === 'ping') {
     console.log(`收到来自 ${user.username} 的 ping`);
     // 这里可以执行复杂的逻辑
+  }
+  return true;
+};
+```
+
+### 示例 4：自定义面板插件 (仅限管理员)
+在侧边栏增加一个“系统统计”链接，仅管理员可见。
+
+```javascript
+hooks.getUI = async () => {
+  return {
+    title: '系统统计',
+    allowedRoles: ['admin'], // 限制仅管理员可见
+    content: `
+      <div style="padding: 20px; background: #111; border-radius: 12px;">
+        <h1 style="color: #fbbf24;">管理员控制台</h1>
+        <p>当前时间: ${new Date().toLocaleString()}</p>
+        <div style="margin-top: 20px; padding: 15px; background: #222; border-radius: 8px;">
+          <h3 style="margin-top: 0;">敏感数据</h3>
+          <p>此面板仅对具有 'admin' 角色的用户显示。</p>
+        </div>
+      </div>
+    `
+  };
+};
+```
+
+### 示例 5：自动回复机器人 (带标签)
+当用户发送 "hello" 时，机器人以 "系统助手" 身份回复，并带有 "机器人" 标签。
+
+```javascript
+hooks.onNewMessage = async ({ user, text, roomId }) => {
+  if (text.toLowerCase().includes('hello')) {
+    await sendMessage({
+      roomId,
+      text: `你好 ${user.username}！我是系统助手，很高兴为你服务。`,
+      sender: '系统助手',
+      color: '#3b82f6',
+      tag: '机器人'
+    });
   }
   return true;
 };
